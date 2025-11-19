@@ -1,0 +1,6 @@
+flask
+flask-socketio
+scapy
+eventlet
+requests
+python-socketio[client]

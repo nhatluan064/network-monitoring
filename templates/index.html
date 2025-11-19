@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Traffic Monitor</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .fade-in { animation: fadeIn 0.5s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .tab-active { border-bottom: 3px solid #3b82f6; color: #3b82f6; font-weight: 700; }
+        .tab-inactive { color: #6b7280; }
+    </style>
+</head>
+<body class="p-6">
+
+    <div class="max-w-7xl mx-auto">
+        <!-- Header & Controls -->
+        <div class="bg-white rounded-xl shadow-sm p-6 mb-6">
+            <div class="flex justify-between items-center mb-4">
+                <div>
+                    <h1 class="text-2xl font-bold text-gray-800">Network Monitor Dashboard</h1>
+                    <p class="text-gray-500 text-sm">Monitoring DNS Traffic & IP Connections</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div id="status-indicator" class="px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-semibold flex items-center gap-1">
+                        <span class="w-2 h-2 bg-gray-400 rounded-full"></span> Stopped
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Control Bar -->
+            <div class="flex flex-col gap-4 border-t pt-4">
+                <!-- Row 1: Interface & Buttons -->
+                <div class="flex gap-4 items-end">
+                    <div class="flex-1">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-1">Network Interface</label>
+                        <select id="interface-select" class="w-full border-gray-300 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none">
+                            <option value="" disabled selected>Loading interfaces...</option>
+                        </select>
+                    </div>
+                    <button id="btn-start" onclick="startSniffer()" class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-bold transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed">
+                        Start Monitoring
+                    </button>
+                    <button id="btn-stop" onclick="stopSniffer()" class="px-6 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-bold transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                        Stop
+                    </button>
+                    <button onclick="clearLogs()" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-sm font-medium transition">
+                        Clear
+                    </button>
+                </div>
+
+                <!-- Row 2: Global Filter -->
+                <div class="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                    <label class="block text-xs font-bold text-blue-800 uppercase mb-1">🎯 Target IP Filter</label>
+                    <div class="flex gap-2">
+                        <input type="text" id="filter-ip" placeholder="Enter IP to track (e.g., 10.10.85.87)" 
+                               class="flex-1 border-gray-300 border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                               oninput="applyGlobalFilter()">
+                        <button onclick="document.getElementById('filter-ip').value=''; applyGlobalFilter()" class="px-3 py-2 bg-white text-gray-500 border border-gray-300 rounded-lg hover:bg-gray-50">
+                            X
+                        </button>
+                    </div>
+                    <p class="text-xs text-blue-600 mt-1">Enter an IP to see only traffic from that specific machine.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab Switcher -->
+        <div class="bg-white rounded-xl shadow-sm mb-6">
+            <div class="flex border-b">
+                <button onclick="switchTab('dns')" id="tab-dns" class="px-6 py-3 tab-active">
+                    Website Monitor (DNS)
+                </button>
+                <button onclick="switchTab('connections')" id="tab-connections" class="px-6 py-3 tab-inactive">
+                    IP Connections
+                </button>
+            </div>
+        </div>
+
+        <!-- DNS View -->
+        <div id="view-dns">
+            <!-- Stats Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-blue-500">
+                    <h3 class="text-gray-500 text-xs uppercase font-bold">Total Requests</h3>
+                    <p class="text-2xl font-bold text-gray-800" id="total-count">0</p>
+                </div>
+                <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-red-500">
+                    <h3 class="text-gray-500 text-xs uppercase font-bold">Suspicious Activity</h3>
+                    <p class="text-2xl font-bold text-red-600" id="suspicious-count">0</p>
+                </div>
+                <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-indigo-500">
+                    <h3 class="text-gray-500 text-xs uppercase font-bold">Active Sources</h3>
+                    <p class="text-2xl font-bold text-gray-800" id="source-count">0</p>
+                </div>
+            </div>
+
+            <!-- Main Table -->
+            <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+                <div id="dns-table-container" class="overflow-x-auto">
+                    <table class="w-full text-sm text-left text-gray-500">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3">Time</th>
+                                <th class="px-6 py-3">Source IP</th>
+                                <th class="px-6 py-3">Service / App</th>
+                                <th class="px-6 py-3">Domain (Website)</th>
+                                <th class="px-6 py-3">Resolved IP</th>
+                                <th class="px-6 py-3">Category</th>
+                            </tr>
+                        </thead>
+                        <tbody id="log-table-body">
+                            <!-- Rows will be added here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Connections View -->
+        <div id="view-connections" style="display: none;">
+            <!-- Stats Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-green-500">
+                    <h3 class="text-gray-500 text-xs uppercase font-bold">Total Connections</h3>
+                    <p class="text-2xl font-bold text-gray-800" id="conn-total-count">0</p>
+                </div>
+                <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-purple-500">
+                    <h3 class="text-gray-500 text-xs uppercase font-bold">Unique Sources</h3>
+                    <p class="text-2xl font-bold text-gray-800" id="conn-source-count">0</p>
+                </div>
+                <div class="bg-white p-4 rounded-xl shadow-sm border-l-4 border-orange-500">
+                    <h3 class="text-gray-500 text-xs uppercase font-bold">Unique Destinations</h3>
+                    <p class="text-2xl font-bold text-gray-800" id="conn-dest-count">0</p>
+                </div>
+            </div>
+
+            <!-- Connections Table -->
+            <div class="bg-white rounded-xl shadow-sm overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm text-left text-gray-500">
+                        <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3">Time</th>
+                                <th class="px-6 py-3">Source IP:Port</th>
+                                <th class="px-6 py-3">→</th>
+                                <th class="px-6 py-3">Destination IP:Port</th>
+                                <th class="px-6 py-3">Protocol</th>
+                            </tr>
+                        </thead>
+                        <tbody id="conn-table-body">
+                            <!-- Rows will be added here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const tableBody = document.getElementById('log-table-body');
+        const connTableBody = document.getElementById('conn-table-body');
+        const totalCountEl = document.getElementById('total-count');
+        const suspiciousCountEl = document.getElementById('suspicious-count');
+        const sourceCountEl = document.getElementById('source-count');
+        const connTotalCountEl = document.getElementById('conn-total-count');
+        const connSourceCountEl = document.getElementById('conn-source-count');
+        const connDestCountEl = document.getElementById('conn-dest-count');
+        const interfaceSelect = document.getElementById('interface-select');
+        const btnStart = document.getElementById('btn-start');
+        const btnStop = document.getElementById('btn-stop');
+        const statusIndicator = document.getElementById('status-indicator');
+        const filterIpInput = document.getElementById('filter-ip');
+
+        let totalLogs = 0;
+        let suspiciousLogs = 0;
+        let activeSources = new Set();
+        let allLogs = []; // Store DNS logs
+        
+        let totalConns = 0;
+        let connSources = new Set();
+        let connDests = new Set();
+        let allConnections = []; // Store connections
+
+        // Load Interfaces on Load
+        fetch('/interfaces')
+            .then(response => response.json())
+            .then(data => {
+                interfaceSelect.innerHTML = '<option value="" disabled selected>Select an Interface</option>';
+                data.forEach(iface => {
+                    const option = document.createElement('option');
+                    option.value = iface.id;
+                    option.text = `${iface.name} [${iface.ip}]`;
+                    interfaceSelect.appendChild(option);
+                });
+            });
+
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            socket.emit('get_status');
+        });
+
+        socket.on('status_update', (data) => {
+            const status = data.status;
+            if (status === 'Running') {
+                statusIndicator.innerHTML = '<span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Running';
+                statusIndicator.className = "px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-semibold flex items-center gap-1";
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+                interfaceSelect.disabled = true;
+            } else if (status === 'Stopped') {
+                statusIndicator.innerHTML = '<span class="w-2 h-2 bg-gray-400 rounded-full"></span> Stopped';
+                statusIndicator.className = "px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-xs font-semibold flex items-center gap-1";
+                btnStart.disabled = false;
+                btnStop.disabled = true;
+                interfaceSelect.disabled = false;
+            }
+        });
+
+        socket.on('sniffer_error', (data) => {
+            alert('Error: ' + data.message);
+            stopSniffer();
+        });
+
+        socket.on('new_log', (data) => {
+            addLog(data);
+        });
+
+        socket.on('new_connection', (data) => {
+            addConnection(data);
+        });
+
+        function startSniffer() {
+            const selectedIf = interfaceSelect.value;
+            if (!selectedIf) {
+                alert("Please select a network interface first!");
+                return;
+            }
+            socket.emit('start_sniffer', { interface: selectedIf });
+            btnStart.disabled = true;
+        }
+
+        function stopSniffer() {
+            socket.emit('stop_sniffer');
+            btnStop.disabled = true;
+        }
+
+        function addLog(data) {
+            totalLogs++;
+            if (data.category === 'Suspicious') suspiciousLogs++;
+            activeSources.add(data.src_ip);
+            
+            allLogs.unshift(data);
+            if (allLogs.length > 500) allLogs.pop();
+
+            totalCountEl.innerText = totalLogs;
+            suspiciousCountEl.innerText = suspiciousLogs;
+            sourceCountEl.innerText = activeSources.size;
+
+            // Only render if matches filter
+            const filterIp = filterIpInput.value.trim();
+            if (filterIp && !data.src_ip.includes(filterIp)) return;
+
+            renderLog(data);
+        }
+
+        // --- FILTERING & DEDUPLICATION ---
+        let hideBackground = false; // Default to FALSE so user sees data first
+        let autoClear = false;
+        let lastLog = null;
+        let lastLogRow = null;
+        let lastLogCount = 1;
+
+        // Add Controls to UI (Above Table)
+        const controlsContainer = document.createElement('div');
+        controlsContainer.className = "flex items-center justify-between mb-2 px-1";
+        controlsContainer.innerHTML = `
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center">
+                    <input id="hide-background" type="checkbox" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500">
+                    <label for="hide-background" class="ms-2 text-sm font-medium text-gray-900">Hide Background/System Traffic</label>
+                </div>
+                <div class="flex items-center">
+                    <input id="auto-clear" type="checkbox" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500">
+                    <label for="auto-clear" class="ms-2 text-sm font-medium text-gray-900">Auto-Clear (Every 5s)</label>
+                </div>
+            </div>
+            <div class="text-xs text-gray-500 italic">
+                *Click domain to visit website
+            </div>
+        `;
+        
+        // Insert controls before the table container
+        const tableContainer = document.getElementById('dns-table-container');
+        tableContainer.parentNode.insertBefore(controlsContainer, tableContainer);
+
+        // Event Listeners
+        document.getElementById('hide-background').addEventListener('change', (e) => {
+            hideBackground = e.target.checked;
+            tableBody.innerHTML = ''; // Clear to avoid confusion
+            lastLog = null;
+        });
+
+        document.getElementById('auto-clear').addEventListener('change', (e) => {
+            autoClear = e.target.checked;
+        });
+
+        // Auto-Clear Interval
+        setInterval(() => {
+            if (autoClear) {
+                tableBody.innerHTML = '';
+                lastLog = null;
+            }
+        }, 5000);
+
+        function renderLog(data) {
+            // Filter Logic
+            if (hideBackground && data.is_background && data.category === 'Normal') return;
+
+            // Deduplication Logic
+            if (lastLog && 
+                lastLog.src_ip === data.src_ip && 
+                lastLog.domain === data.domain && 
+                lastLog.service === data.service) {
+                
+                lastLogCount++;
+                // Update existing row badge
+                const countBadge = lastLogRow.querySelector('.count-badge');
+                if (countBadge) {
+                    countBadge.textContent = `x${lastLogCount}`;
+                    countBadge.classList.remove('hidden');
+                }
+                // Update timestamp to latest
+                lastLogRow.cells[0].textContent = data.timestamp;
+                
+                // Flash effect to show activity
+                lastLogRow.classList.add('bg-blue-50');
+                setTimeout(() => lastLogRow.classList.remove('bg-blue-50'), 200);
+                return;
+            }
+
+            // New Row
+            lastLog = data;
+            lastLogCount = 1;
+
+            const row = document.createElement('tr');
+            lastLogRow = row; // Save reference
+            row.className = 'bg-white border-b hover:bg-gray-50 fade-in transition-colors duration-200';
+            
+            const categoryClass = data.category === 'Suspicious' 
+                ? 'bg-red-100 text-red-800' 
+                : 'bg-green-100 text-green-800';
+
+            let serviceBadge = `<span class="bg-gray-100 text-gray-800 text-xs font-medium px-2.5 py-0.5 rounded">${data.service || 'Other'}</span>`;
+            if (data.service === 'YouTube') serviceBadge = `<span class="bg-red-100 text-red-800 text-xs font-medium px-2.5 py-0.5 rounded">YouTube</span>`;
+            if (data.service === 'Facebook') serviceBadge = `<span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">Facebook</span>`;
+            if (data.service === 'Google') serviceBadge = `<span class="bg-blue-50 text-blue-600 text-xs font-medium px-2.5 py-0.5 rounded">Google</span>`;
+            if (data.service === 'TikTok') serviceBadge = `<span class="bg-gray-800 text-white text-xs font-medium px-2.5 py-0.5 rounded">TikTok</span>`;
+            if (data.service === 'Cellphones') serviceBadge = `<span class="bg-red-600 text-white text-xs font-medium px-2.5 py-0.5 rounded">Cellphones</span>`;
+            if (data.service === 'Wattpad') serviceBadge = `<span class="bg-orange-500 text-white text-xs font-medium px-2.5 py-0.5 rounded">Wattpad</span>`;
+            if (data.service === 'Comics/Stories') serviceBadge = `<span class="bg-purple-100 text-purple-800 text-xs font-medium px-2.5 py-0.5 rounded">Comics</span>`;
+
+            // Make Domain Clickable
+            const domainLink = `<a href="http://${data.domain}" target="_blank" class="text-blue-600 hover:underline hover:text-blue-800 transition-colors">${data.domain}</a>`;
+
+            row.innerHTML = `
+                <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">${data.timestamp}</td>
+                <td class="px-6 py-4 text-blue-600 font-mono">${data.src_ip}</td>
+                <td class="px-6 py-4">${serviceBadge}</td>
+                <td class="px-6 py-4 font-bold text-gray-800 text-xs flex items-center">
+                    ${domainLink} 
+                    <span class="text-gray-400 font-normal text-[10px] ml-1 mr-2">↗</span>
+                    <span class="count-badge hidden bg-gray-200 text-gray-800 text-xs font-bold px-2 py-0.5 rounded-full">x1</span>
+                </td>
+                <td class="px-6 py-4 font-mono text-gray-500 text-xs">${data.resolved_ip || 'N/A'}</td>
+                <td class="px-6 py-4">
+                    <span class="${categoryClass} text-xs font-medium px-2.5 py-0.5 rounded border border-opacity-20">
+                        ${data.category}
+                    </span>
+                </td>
+            `;
+
+            tableBody.insertBefore(row, tableBody.firstChild);
+            if (tableBody.children.length > 100) tableBody.removeChild(tableBody.lastChild);
+        }
+
+        // --- ALERT SYSTEM ---
+        const alertContainer = document.getElementById('alert-container');
+        socket.on('new_alert', (data) => {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = 'flex items-center p-4 mb-4 text-red-800 rounded-lg bg-red-50 border border-red-200 shadow-sm fade-in';
+            alertDiv.innerHTML = `
+                <svg class="flex-shrink-0 w-4 h-4" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 .5a9.5 9.5 0 1 0 9.5 9.5A9.51 9.51 0 0 0 10 .5ZM9.5 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM12 15H8a1 1 0 0 1 0-2h1v-3H8a1 1 0 0 1 0-2h2a1 1 0 0 1 1 1v4h1a1 1 0 0 1 0 2Z"/>
+                </svg>
+                <span class="sr-only">Alert</span>
+                <div class="ms-3 text-sm font-medium">
+                    <span class="font-bold">ALERT!</span> ${data.message}
+                </div>
+                <button type="button" class="ms-auto -mx-1.5 -my-1.5 bg-red-50 text-red-500 rounded-lg focus:ring-2 focus:ring-red-400 p-1.5 hover:bg-red-200 inline-flex items-center justify-center h-8 w-8" aria-label="Close" onclick="this.parentElement.remove()">
+                    <span class="sr-only">Close</span>
+                    <svg class="w-3 h-3" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 14 14">
+                        <path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m1 1 6 6m0 0 6 6M7 7l6-6M7 7l-6 6"/>
+                    </svg>
+                </button>
+            `;
+            alertContainer.prepend(alertDiv);
+            
+            // Auto remove after 10 seconds
+            setTimeout(() => {
+                if(alertDiv.parentElement) alertDiv.remove();
+            }, 10000);
+        });
+
+        function addConnection(data) {
+            totalConns++;
+            connSources.add(data.src_ip);
+            connDests.add(data.dst_ip);
+            
+            allConnections.unshift(data);
+            if (allConnections.length > 500) allConnections.pop();
+
+            connTotalCountEl.innerText = totalConns;
+            connSourceCountEl.innerText = connSources.size;
+            connDestCountEl.innerText = connDests.size;
+
+            // Only render if matches filter
+            const filterIp = filterIpInput.value.trim();
+            if (filterIp && !data.src_ip.includes(filterIp)) return;
+
+            renderConnection(data);
+        }
+
+        function renderConnection(data) {
+            const row = document.createElement('tr');
+            row.className = 'bg-white border-b hover:bg-gray-50 fade-in';
+            
+            const protocolClass = data.protocol === 'TCP' 
+                ? 'bg-blue-100 text-blue-800' 
+                : 'bg-purple-100 text-purple-800';
+
+            row.innerHTML = `
+                <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">${data.timestamp}</td>
+                <td class="px-6 py-4 text-blue-600 font-mono">${data.src_ip}:${data.src_port}</td>
+                <td class="px-6 py-4 text-center text-gray-400">→</td>
+                <td class="px-6 py-4 text-orange-600 font-mono">${data.dst_ip}:${data.dst_port}</td>
+                <td class="px-6 py-4">
+                    <span class="${protocolClass} text-xs font-medium px-2.5 py-0.5 rounded">
+                        ${data.protocol}
+                    </span>
+                </td>
+            `;
+
+            connTableBody.insertBefore(row, connTableBody.firstChild);
+            if (connTableBody.children.length > 100) connTableBody.removeChild(connTableBody.lastChild);
+        }
+
+        function applyGlobalFilter() {
+            const filterIp = filterIpInput.value.trim();
+            
+            // Re-render DNS Logs
+            tableBody.innerHTML = '';
+            const filteredLogs = filterIp 
+                ? allLogs.filter(l => l.src_ip.includes(filterIp))
+                : allLogs;
+            filteredLogs.slice(0, 100).forEach(renderLog);
+
+            // Re-render Connections
+            connTableBody.innerHTML = '';
+            const filteredConns = filterIp 
+                ? allConnections.filter(c => c.src_ip.includes(filterIp))
+                : allConnections;
+            filteredConns.slice(0, 100).forEach(renderConnection);
+        }
+
+        function clearLogs() {
+            tableBody.innerHTML = '';
+            connTableBody.innerHTML = '';
+            totalLogs = 0;
+            suspiciousLogs = 0;
+            activeSources.clear();
+            totalConns = 0;
+            connSources.clear();
+            connDests.clear();
+            allLogs = [];
+            allConnections = [];
+            
+            totalCountEl.innerText = '0';
+            suspiciousCountEl.innerText = '0';
+            sourceCountEl.innerText = '0';
+            connTotalCountEl.innerText = '0';
+            connSourceCountEl.innerText = '0';
+            connDestCountEl.innerText = '0';
+        }
+
+        function switchTab(tab) {
+            const dnsView = document.getElementById('view-dns');
+            const connView = document.getElementById('view-connections');
+            const tabDns = document.getElementById('tab-dns');
+            const tabConn = document.getElementById('tab-connections');
+            
+            if (tab === 'dns') {
+                dnsView.style.display = 'block';
+                connView.style.display = 'none';
+                tabDns.className = 'px-6 py-3 tab-active';
+                tabConn.className = 'px-6 py-3 tab-inactive';
+            } else {
+                dnsView.style.display = 'none';
+                connView.style.display = 'block';
+                tabDns.className = 'px-6 py-3 tab-inactive';
+                tabConn.className = 'px-6 py-3 tab-active';
+            }
+        }
+    </script>
+</body>
+</html>

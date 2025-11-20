@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+agent_debug.log
+*.png
+*.jpg
+*.jpeg
+temp_screen_*
+.vscode/
+.idea/

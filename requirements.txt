@@ -4,3 +4,4 @@ scapy
 eventlet
 requests
 python-socketio[client]
+Pillow

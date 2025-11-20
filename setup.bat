@@ -38,7 +38,7 @@ echo [INFO] Npcap Ready.
 
 REM 3. Install Libs
 echo [INFO] Installing Libraries...
-pip install scapy requests python-socketio[client] eventlet flask flask-socketio --disable-pip-version-check
+pip install scapy requests python-socketio[client] eventlet flask flask-socketio pillow --disable-pip-version-check
 
 REM 4. Config
 echo [INFO] Creating Config...
@@ -48,6 +48,22 @@ echo   "server_url": "http://%SERVER_IP%:%SERVER_PORT%"
 echo }
 ) > config.json
 
+REM 4.5 Download Suspicious Keywords from Server
+echo [INFO] Downloading suspicious_keywords.json from Server...
+curl -s -o suspicious_keywords.json "http://%SERVER_IP%:%SERVER_PORT%/download/keywords" 2>nul
+if %errorlevel% neq 0 (
+    echo [WARN] Download failed. Creating default keywords...
+    (
+    echo {
+    echo   "keywords": [
+    echo     "youtube", "facebook", "tiktok", "game", "steam", "bet",
+    echo     "movie", "phim", "netflix", "shopee", "lazada"
+    echo   ]
+    echo }
+    ) > suspicious_keywords.json
+) else (
+    echo [INFO] Keywords downloaded successfully from Server!
+)
 REM 5. Auto-Start
 echo [INFO] Setting up Auto-Start...
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"

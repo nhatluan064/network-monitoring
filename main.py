@@ -1,7 +1,7 @@
 import logging
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, send_file
 from flask_socketio import SocketIO
-from scapy.all import sniff, DNS, DNSQR, IP, TCP, UDP, get_if_list, conf
+from scapy.all import sniff, DNS, DNSQR, IP, TCP, UDP, get_if_list, conf, arping, Ether, ARP, srp
 from scapy.arch.windows import get_windows_if_list
 import threading
 import datetime
@@ -9,7 +9,83 @@ import time
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+import json
+import os
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger()
+
+# Global cache for keywords
+_keywords_cache = []
+_keywords_mtime = 0
+
+def get_suspicious_keywords():
+    """
+    Returns the list of suspicious keywords, reloading from file if it has changed.
+    """
+    global _keywords_cache, _keywords_mtime
+    
+    config_path = 'suspicious_keywords.json'
+    default_keywords = [
+        'youtube', 'facebook', 'tiktok', 'game', 'steam', 'bet', 'movie', 'phim', 'netflix', 
+        'shopee', 'lazada', 'truyen', 'manga', 'comic', 'nettruyen', 'fuhu', '8cache', 'blogtruyen',
+        'garena', 'roblox', 'minecraft', 'valorant', 'leagueoflegends'
+    ]
+
+    if not os.path.exists(config_path):
+        return default_keywords
+
+    try:
+        current_mtime = os.path.getmtime(config_path)
+        if current_mtime > _keywords_mtime:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+                _keywords_cache = data.get('keywords', default_keywords)
+                _keywords_mtime = current_mtime
+                # logger.info("Reloaded suspicious keywords")
+    except Exception as e:
+        logger.error(f"Error reloading suspicious keywords: {e}")
+        if not _keywords_cache:
+            return default_keywords
+            
+    return _keywords_cache
+
+# Initialize
+get_suspicious_keywords()
+
+# Global cache for ignored IPs
+_ignored_ips_cache = []
+_ignored_ips_mtime = 0
+
+def get_ignored_ips():
+    """
+    Returns the list of ignored IPs, reloading from file if it has changed.
+    """
+    global _ignored_ips_cache, _ignored_ips_mtime
+    
+    config_path = 'ignored_ips.json'
+    default_ips = []
+
+    if not os.path.exists(config_path):
+        return default_ips
+
+    try:
+        current_mtime = os.path.getmtime(config_path)
+        if current_mtime > _ignored_ips_mtime:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+                _ignored_ips_cache = data.get('ignored_ips', default_ips)
+                _ignored_ips_mtime = current_mtime
+    except Exception as e:
+        logger.error(f"Error reloading ignored IPs: {e}")
+        if not _ignored_ips_cache:
+            return default_ips
+            
+    return _ignored_ips_cache
+
+# Initialize
+get_ignored_ips()
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -50,6 +126,10 @@ def packet_callback(packet):
                 ip_src = packet[IP].dst # In a response, the DST is the one who asked (the internal client)
                 # ip_src here is the Internal IP we want to monitor
                 
+                # Check Ignored IPs
+                if ip_src in get_ignored_ips():
+                    return
+                
                 query_name = dns_layer.qd.qname.decode('utf-8').rstrip('.')
                 
                 # Extract the first A record (IP address) from answers
@@ -63,7 +143,8 @@ def packet_callback(packet):
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 category = "Normal"
-                suspicious_keywords = ['youtube', 'facebook', 'tiktok', 'game', 'steam', 'bet', 'movie', 'phim', 'netflix', 'shopee', 'lazada']
+                category = "Normal"
+                suspicious_keywords = get_suspicious_keywords()
                 
                 for keyword in suspicious_keywords:
                     if keyword in query_name.lower():
@@ -163,9 +244,50 @@ def sniffer_job(interface_name):
         recent_connections.clear()
         socketio.emit('status_update', {'status': 'Stopped'})
 
+def scan_network(interface_name, ip_address):
+    """
+    Performs an ARP scan to find active devices on the local network.
+    """
+    logger.info(f"Starting Network Scan on {interface_name} with IP {ip_address}...")
+    try:
+        if not ip_address or ip_address == "0.0.0.0":
+            logger.warning("No valid IP provided for scan.")
+            return
+
+        # Assume /24
+        ip_parts = ip_address.split('.')
+        subnet = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.0/24"
+        
+        logger.info(f"Scanning subnet: {subnet}")
+        
+        # Use scapy's srp (send/receive packet) for ARP
+        ans, unans = srp(Ether(dst="ff:ff:ff:ff:ff:ff")/ARP(pdst=subnet), timeout=2, iface=interface_name, verbose=0)
+        
+        devices = []
+        for sent, received in ans:
+            devices.append({'ip': received.psrc, 'mac': received.hwsrc})
+            
+        logger.info(f"Scan complete. Found {len(devices)} devices.")
+        socketio.emit('network_scan_result', {'devices': devices})
+        
+    except Exception as e:
+        logger.error(f"Network scan failed: {e}")
+
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/download/keywords')
+def download_keywords():
+    """Serve the suspicious_keywords.json for agents to download"""
+    try:
+        return send_file('suspicious_keywords.json', as_attachment=True)
+    except:
+        # Return default if file not found
+        return jsonify({"keywords": [
+            "youtube", "facebook", "tiktok", "game", "steam", "bet", 
+            "movie", "phim", "netflix", "shopee", "lazada"
+        ]})
 
 @app.route('/interfaces')
 def get_interfaces():
@@ -212,6 +334,8 @@ def handle_start_sniffer(data):
     global sniffing_active, sniffer_thread, selected_interface
     
     interface_id = data.get('interface')
+    interface_ip = data.get('ip')
+
     if not interface_id:
         return
         
@@ -223,6 +347,10 @@ def handle_start_sniffer(data):
     
     sniffer_thread = threading.Thread(target=sniffer_job, args=(selected_interface,), daemon=True)
     sniffer_thread.start()
+    
+    # Start Network Scan in parallel
+    scan_thread = threading.Thread(target=scan_network, args=(selected_interface, interface_ip), daemon=True)
+    scan_thread.start()
     
     socketio.emit('status_update', {'status': 'Running'})
 
@@ -301,13 +429,36 @@ def handle_agent_data(data):
     """
     Receives data from remote agents and broadcasts it to the dashboard.
     """
+    # Master Switch: If monitoring is stopped, ignore ALL data
+    # if not sniffing_active:
+    #     return
+
+    # Check Ignored IPs
+    src_ip = data.get('src_ip')
+    if src_ip in get_ignored_ips():
+        return
+
     # Determine type of data
     data_type = data.get('type')
     
     if data_type == 'dns':
+        # IMPORTANT: Re-classify category based on SERVER keywords
+        # Agent sends everything as "Normal", server decides if Suspicious
+        domain = data.get('domain', '')
+        category = "Normal"
+        suspicious_keywords = get_suspicious_keywords()
+        
+        for keyword in suspicious_keywords:
+            if keyword in domain.lower():
+                category = "Suspicious"
+                break
+        
+        # Update the category with server-side classification
+        data['category'] = category
+        
         # Enrich with Service Name
-        data['service'] = identify_service(data.get('domain', ''))
-        data['is_background'] = is_background_traffic(data.get('domain', ''), data['service'])
+        data['service'] = identify_service(domain)
+        data['is_background'] = is_background_traffic(domain, data['service'])
         
         # Process for Alerts
         src_ip = data.get('src_ip')

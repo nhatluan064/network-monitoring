@@ -4,14 +4,15 @@ import threading
 import datetime
 import logging
 from scapy.all import sniff, DNS, DNSQR, IP, TCP, UDP, conf
+from PIL import ImageGrab
+import base64
+import os
 
 import json
-import os
 import sys
 import socket
 
 # --- CONFIGURATION ---
-# Default fallback
 DEFAULT_SERVER_URL = 'http://10.10.85.3:5000'
 
 def load_config():
@@ -26,9 +27,40 @@ def load_config():
     return DEFAULT_SERVER_URL
 
 SERVER_URL = load_config()
-# ---------------------
 
-# Setup Logging to File
+# Keyword cache for screenshot trigger
+_keywords_cache = []
+_keywords_mtime = 0
+
+def get_suspicious_keywords():
+    """Returns keywords for screenshot triggering (local file)"""
+    global _keywords_cache, _keywords_mtime
+    
+    config_path = 'suspicious_keywords.json'
+    default_keywords = [
+        'youtube', 'facebook', 'tiktok', 'game', 'steam', 'bet', 'movie', 'phim', 'netflix', 
+        'shopee', 'lazada', 'truyen', 'manga', 'comic'
+    ]
+
+    if not os.path.exists(config_path):
+        return default_keywords
+
+    try:
+        current_mtime = os.path.getmtime(config_path)
+        if current_mtime > _keywords_mtime:
+            with open(config_path, 'r') as f:
+                data = json.load(f)
+                _keywords_cache = data.get('keywords', default_keywords)
+                _keywords_mtime = current_mtime
+    except Exception as e:
+        if not _keywords_cache:
+            return default_keywords
+            
+    return _keywords_cache
+
+get_suspicious_keywords()
+
+# Setup Logging
 log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_debug.log')
 logging.basicConfig(
     level=logging.INFO,
@@ -54,8 +86,6 @@ def get_host_ip():
         return "127.0.0.1"
 
 my_ip = get_host_ip()
-
-# Connection tracking
 recent_connections = set()
 
 def packet_callback(packet):
@@ -66,37 +96,58 @@ def packet_callback(packet):
         # DNS Monitoring
         if packet.haslayer(DNS) and packet.haslayer(IP):
             dns_layer = packet.getlayer(DNS)
-            if dns_layer.qr == 1 and dns_layer.ancount > 0: # Response
+            if dns_layer.qr == 1 and dns_layer.ancount > 0:  # Response
                 query_name = dns_layer.qd.qname.decode('utf-8').rstrip('.')
                 resolved_ip = "N/A"
                 for i in range(dns_layer.ancount):
                     r = dns_layer.an[i]
-                    if r.type == 1: 
+                    if r.type == 1:
                         resolved_ip = r.rdata
                         break
                 
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                category = "Normal"
-                suspicious_keywords = ['youtube', 'facebook', 'tiktok', 'game', 'steam', 'bet', 'movie', 'phim', 'netflix', 'shopee', 'lazada']
-                for keyword in suspicious_keywords:
+                # Check keywords for SCREENSHOT trigger (not for category)
+                # Server will decide the final category
+                should_screenshot = False
+                keywords = get_suspicious_keywords()
+                for keyword in keywords:
                     if keyword in query_name.lower():
-                        category = "Suspicious"
+                        should_screenshot = True
                         break
                 
+                # Capture screenshot if triggered
+                screenshot_b64 = None
+                if should_screenshot:
+                    try:
+                        screenshot = ImageGrab.grab()
+                        temp_file = f"temp_screen_{int(time.time())}.png"
+                        screenshot.save(temp_file)
+                        
+                        with open(temp_file, "rb") as img_file:
+                            screenshot_b64 = base64.b64encode(img_file.read()).decode('utf-8')
+                        
+                        os.remove(temp_file)
+                        logger.info(f"Screenshot captured for {query_name}")
+                    except Exception as e:
+                        logger.error(f"Screenshot failed: {e}")
+                
+                # Send all as "Normal" - Server will re-classify
                 data = {
                     'timestamp': timestamp,
-                    'src_ip': my_ip, # Force Source IP to be THIS machine
+                    'src_ip': my_ip,
                     'domain': query_name,
                     'resolved_ip': resolved_ip,
-                    'category': category,
-                    'type': 'dns'
+                    'category': "Normal",  # Server decides final category
+                    'type': 'dns',
+                    'image': screenshot_b64
                 }
                 sio.emit('agent_data', data)
 
         # Connection Monitoring
         elif packet.haslayer(IP):
-            if packet[IP].src != my_ip: return # Only track OUTGOING connections from this machine
+            if packet[IP].src != my_ip:
+                return
             
             ip_dst = packet[IP].dst
             protocol = "OTHER"
@@ -115,9 +166,11 @@ def packet_callback(packet):
                 return
 
             conn_sig = f"{my_ip}:{src_port}->{ip_dst}:{dst_port}"
-            if conn_sig in recent_connections: return
+            if conn_sig in recent_connections:
+                return
             recent_connections.add(conn_sig)
-            if len(recent_connections) > 1000: recent_connections.clear()
+            if len(recent_connections) > 1000:
+                recent_connections.clear()
             
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
@@ -137,7 +190,6 @@ def packet_callback(packet):
 
 def sniffer_job():
     logger.info(f"Agent Sniffer started on {my_ip}")
-    # Sniff on all interfaces
     sniff(filter="ip", prn=packet_callback, store=0)
 
 def connect_to_server():
@@ -153,9 +205,6 @@ def connect_to_server():
             time.sleep(5)
 
 if __name__ == '__main__':
-    # Start connection thread
     conn_thread = threading.Thread(target=connect_to_server, daemon=True)
     conn_thread.start()
-    
-    # Start sniffer
     sniffer_job()

@@ -65,12 +65,6 @@
                     </div>
                     <p class="text-xs text-blue-600 mt-1">Enter an IP to see only traffic from that specific machine.</p>
                 </div>
-            </div>
-        </div>
-
-        <!-- Tab Switcher -->
-        <div class="bg-white rounded-xl shadow-sm mb-6">
-            <div class="flex border-b">
                 <button onclick="switchTab('dns')" id="tab-dns" class="px-6 py-3 tab-active">
                     Website Monitor (DNS)
                 </button>
@@ -110,6 +104,7 @@
                                 <th class="px-6 py-3">Domain (Website)</th>
                                 <th class="px-6 py-3">Resolved IP</th>
                                 <th class="px-6 py-3">Category</th>
+                                <th class="px-6 py-3">Image</th>
                             </tr>
                         </thead>
                         <tbody id="log-table-body">
@@ -158,6 +153,16 @@
                 </div>
             </div>
         </div>
+
+    <!-- Image Modal -->
+    <div id="image-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-90 flex items-center justify-center p-4" onclick="closeModal()">
+        <div class="relative max-w-full max-h-full">
+            <button onclick="closeModal()" class="absolute -top-10 right-0 text-white hover:text-gray-300 focus:outline-none">
+                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+            <img id="modal-image" src="" class="max-w-full max-h-[90vh] rounded-lg shadow-2xl object-contain" alt="Full size screenshot">
+        </div>
+    </div>
     </div>
 
     <script>
@@ -194,6 +199,7 @@
                 data.forEach(iface => {
                     const option = document.createElement('option');
                     option.value = iface.id;
+                    option.dataset.ip = iface.ip; // Store IP in dataset
                     option.text = `${iface.name} [${iface.ip}]`;
                     interfaceSelect.appendChild(option);
                 });
@@ -234,13 +240,36 @@
             addConnection(data);
         });
 
+        socket.on('network_scan_result', (data) => {
+            const deviceTable = document.getElementById('device-table-body');
+            const deviceView = document.getElementById('view-devices');
+            deviceTable.innerHTML = '';
+            
+            if (data.devices.length > 0) {
+                deviceView.classList.remove('hidden');
+                data.devices.forEach(dev => {
+                    const row = document.createElement('tr');
+                    row.className = 'bg-white border-b hover:bg-gray-50';
+                    row.innerHTML = `
+                        <td class="px-6 py-4 font-bold text-gray-900">${dev.ip}</td>
+                        <td class="px-6 py-4 font-mono text-gray-600">${dev.mac}</td>
+                        <td class="px-6 py-4"><span class="bg-green-100 text-green-800 text-xs font-medium px-2.5 py-0.5 rounded">Online</span></td>
+                    `;
+                    deviceTable.appendChild(row);
+                });
+            }
+        });
+
         function startSniffer() {
             const selectedIf = interfaceSelect.value;
+            const selectedOption = interfaceSelect.options[interfaceSelect.selectedIndex];
+            const selectedIp = selectedOption.dataset.ip;
+
             if (!selectedIf) {
                 alert("Please select a network interface first!");
                 return;
             }
-            socket.emit('start_sniffer', { interface: selectedIf });
+            socket.emit('start_sniffer', { interface: selectedIf, ip: selectedIp });
             btnStart.disabled = true;
         }
 
@@ -261,7 +290,7 @@
             suspiciousCountEl.innerText = suspiciousLogs;
             sourceCountEl.innerText = activeSources.size;
 
-            // Only render if matches filter
+            // Apply filter ONLY if user has entered something
             const filterIp = filterIpInput.value.trim();
             if (filterIp && !data.src_ip.includes(filterIp)) return;
 
@@ -355,17 +384,25 @@
                 ? 'bg-red-100 text-red-800' 
                 : 'bg-green-100 text-green-800';
 
-            let serviceBadge = `<span class="bg-gray-100 text-gray-800 text-xs font-medium px-2.5 py-0.5 rounded">${data.service || 'Other'}</span>`;
-            if (data.service === 'YouTube') serviceBadge = `<span class="bg-red-100 text-red-800 text-xs font-medium px-2.5 py-0.5 rounded">YouTube</span>`;
-            if (data.service === 'Facebook') serviceBadge = `<span class="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded">Facebook</span>`;
-            if (data.service === 'Google') serviceBadge = `<span class="bg-blue-50 text-blue-600 text-xs font-medium px-2.5 py-0.5 rounded">Google</span>`;
-            if (data.service === 'TikTok') serviceBadge = `<span class="bg-gray-800 text-white text-xs font-medium px-2.5 py-0.5 rounded">TikTok</span>`;
-            if (data.service === 'Cellphones') serviceBadge = `<span class="bg-red-600 text-white text-xs font-medium px-2.5 py-0.5 rounded">Cellphones</span>`;
-            if (data.service === 'Wattpad') serviceBadge = `<span class="bg-orange-500 text-white text-xs font-medium px-2.5 py-0.5 rounded">Wattpad</span>`;
-            if (data.service === 'Comics/Stories') serviceBadge = `<span class="bg-purple-100 text-purple-800 text-xs font-medium px-2.5 py-0.5 rounded">Comics</span>`;
+            // Service Badge Logic: Red if Suspicious, Blue if Normal (for all services)
+            let serviceColorClass = 'bg-blue-100 text-blue-800';
+            if (data.category === 'Suspicious') {
+                serviceColorClass = 'bg-red-100 text-red-800';
+            }
+            
+            let serviceBadge = `<span class="${serviceColorClass} text-xs font-medium px-2.5 py-0.5 rounded">${data.service || 'Other'}</span>`;
 
             // Make Domain Clickable
             const domainLink = `<a href="http://${data.domain}" target="_blank" class="text-blue-600 hover:underline hover:text-blue-800 transition-colors">${data.domain}</a>`;
+
+            const imageCell = data.image 
+                ? `<div class="relative group">
+                     <img src="data:image/png;base64,${data.image}" 
+                          onclick="openModal('data:image/png;base64,${data.image}')"
+                          class="h-8 w-auto rounded border border-gray-300 cursor-pointer transition-transform duration-200 hover:scale-125 hover:shadow-lg" 
+                          title="Click to enlarge">
+                   </div>`
+                : `<span class="text-gray-300">-</span>`;
 
             row.innerHTML = `
                 <td class="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">${data.timestamp}</td>
@@ -381,6 +418,9 @@
                     <span class="${categoryClass} text-xs font-medium px-2.5 py-0.5 rounded border border-opacity-20">
                         ${data.category}
                     </span>
+                </td>
+                <td class="px-6 py-4">
+                    ${imageCell}
                 </td>
             `;
 
@@ -495,6 +535,10 @@
             connTotalCountEl.innerText = '0';
             connSourceCountEl.innerText = '0';
             connDestCountEl.innerText = '0';
+            
+            // Also clear devices
+            document.getElementById('device-table-body').innerHTML = '';
+            document.getElementById('view-devices').classList.add('hidden');
         }
 
         function switchTab(tab) {
@@ -515,6 +559,41 @@
                 tabConn.className = 'px-6 py-3 tab-active';
             }
         }
+        // --- MODAL LOGIC ---
+        const modal = document.getElementById('image-modal');
+        const modalImg = document.getElementById('modal-image');
+
+        function toggleDevices() {
+            const container = document.getElementById('device-table-container');
+            const toggleText = document.getElementById('toggle-devices-text');
+            
+            if (container.style.display === 'none') {
+                container.style.display = 'block';
+                toggleText.textContent = 'Hide';
+            } else {
+                container.style.display = 'none';
+                toggleText.textContent = 'Show';
+            }
+        }
+
+        function openModal(imgSrc) {
+            modalImg.src = imgSrc;
+            modal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden'; // Prevent scrolling
+        }
+
+        function closeModal() {
+            modal.classList.add('hidden');
+            modalImg.src = '';
+            document.body.style.overflow = 'auto';
+        }
+
+        // Close on Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === "Escape") {
+                closeModal();
+            }
+        });
     </script>
 </body>
 </html>

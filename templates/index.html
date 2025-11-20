@@ -460,7 +460,7 @@
             `;
 
             tableBody.insertBefore(row, tableBody.firstChild);
-            if (tableBody.children.length > 100) tableBody.removeChild(tableBody.lastChild);
+            // Keep all history - no limit
         }
 
         // --- ALERT SYSTEM ---
@@ -531,7 +531,7 @@
             `;
 
             connTableBody.insertBefore(row, connTableBody.firstChild);
-            if (connTableBody.children.length > 100) connTableBody.removeChild(connTableBody.lastChild);
+            // Keep all history - no limit
         }
 
         function applyGlobalFilter() {

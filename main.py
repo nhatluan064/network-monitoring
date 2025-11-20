@@ -227,10 +227,10 @@ def sniffer_job(interface_name):
     
     try:
         # Scapy sniff loop
-        # Capture IP packets (DNS on UDP 53, plus TCP/UDP for connections)
+        # CRITICAL FIX: Only capture DNS to prevent ERP/MES/Printing lag
         sniff(
             iface=interface_name, 
-            filter="ip",  # Capture all IP traffic
+            filter="udp port 53",  # DNS-only prevents production system interference
             prn=packet_callback, 
             store=0,
             stop_filter=lambda x: not sniffing_active

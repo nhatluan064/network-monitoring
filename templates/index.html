@@ -74,6 +74,33 @@
             </div>
         </div>
 
+        <!-- Discovered Devices (Local Network) -->
+        <div id="view-devices" class="bg-white rounded-xl shadow-sm p-6 mb-6 hidden">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-gray-800 flex items-center gap-2">
+                    <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                    Discovered Devices (Local Network)
+                </h3>
+                <button onclick="toggleDevices()" class="px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition">
+                    <span id="toggle-devices-text">Hide</span>
+                </button>
+            </div>
+            <div id="device-table-container" class="overflow-x-auto">
+                <table class="w-full text-sm text-left text-gray-500">
+                    <thead class="text-xs text-gray-700 uppercase bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3">IP Address</th>
+                            <th class="px-6 py-3">MAC Address</th>
+                            <th class="px-6 py-3">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="device-table-body">
+                        <!-- Devices will be populated here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- DNS View -->
         <div id="view-dns">
             <!-- Stats Cards -->
@@ -567,17 +594,6 @@
             const container = document.getElementById('device-table-container');
             const toggleText = document.getElementById('toggle-devices-text');
             
-            if (container.style.display === 'none') {
-                container.style.display = 'block';
-                toggleText.textContent = 'Hide';
-            } else {
-                container.style.display = 'none';
-                toggleText.textContent = 'Show';
-            }
-        }
-
-        function openModal(imgSrc) {
-            modalImg.src = imgSrc;
             modal.classList.remove('hidden');
             document.body.style.overflow = 'hidden'; // Prevent scrolling
         }

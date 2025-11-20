@@ -342,7 +342,7 @@
                 </div>
                 <div class="flex items-center">
                     <input id="auto-clear" type="checkbox" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500">
-                    <label for="auto-clear" class="ms-2 text-sm font-medium text-gray-900">Auto-Clear (Every 5s)</label>
+                    <label for="auto-clear" class="ms-2 text-sm font-medium text-gray-900">Auto-Clear (Every 30s)</label>
                 </div>
             </div>
             <div class="text-xs text-gray-500 italic">
@@ -594,14 +594,19 @@
             const container = document.getElementById('device-table-container');
             const toggleText = document.getElementById('toggle-devices-text');
             
-            modal.classList.remove('hidden');
-            document.body.style.overflow = 'hidden'; // Prevent scrolling
+            if (container.style.display === 'none') {
+                container.style.display = 'block';
+                toggleText.textContent = 'Hide';
+            } else {
+                container.style.display = 'none';
+                toggleText.textContent = 'Show';
+            }
         }
 
-        function closeModal() {
-            modal.classList.add('hidden');
-            modalImg.src = '';
-            document.body.style.overflow = 'auto';
+        function openModal(imgSrc) {
+            modalImg.src = imgSrc;
+            modal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
         }
 
         // Close on Escape key
